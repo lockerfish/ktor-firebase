@@ -1,11 +1,10 @@
 package com.lockerfish.firebase
 
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.FirebaseToken
 import io.ktor.http.auth.*
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
-import io.ktor.server.request.*
+import io.ktor.server.response.*
 import io.ktor.util.logging.*
 
 /**
@@ -22,10 +21,10 @@ internal val logger = KtorSimpleLogger("com.lockerfish.firebase")
  * @param validate The validation function for Firebase tokens.
  */
 internal class FirebaseAuthProvider(
-  config: FirebaseConfig,
+  private val config: FirebaseConfig,
   private val headerParser: (ApplicationCall) -> HttpAuthHeader? = { call -> call.request.parseAuthorizationHeaderOrNull() },
   private val auth: FirebaseAuth = FirebaseAdmin.firebaseAuth,
-  private val validate: suspend ApplicationCall.(AuthorizedUser) -> Any? = config.firebaseValidate,
+  private val validate: AuthenticationFunction<AuthorizedUser> = config.authenticate,
 ) : AuthenticationProvider(config) {
 
   private val errorKey: String = "FirebaseAuthProvider"
@@ -36,61 +35,65 @@ internal class FirebaseAuthProvider(
    * @param context The authentication context.
    */
   override suspend fun onAuthenticate(context: AuthenticationContext) {
-    val token = headerParser(context.call)
-    if (token == null) {
-      context.error(errorKey, AuthenticationFailedCause.Error("Unable to parse authorization header"))
-      return
-    }
 
-    if (token.authScheme != "Bearer" || token !is HttpAuthHeader.Single || token.blob.isEmpty()) {
-      context.challenge(
-        errorKey,
-        AuthenticationFailedCause.InvalidCredentials
-      ) { challengeFunc, _ ->
-        challengeFunc.complete()
-        context.error(errorKey, AuthenticationFailedCause.Error("Invalid token"))
+    val token = (headerParser(context.call) as? HttpAuthHeader.Single)
+      ?.takeIf {
+        it.authScheme.equals(AuthScheme.Bearer, ignoreCase = true)
       }
-      logger.error("Invalid token.\n $token")
-      return
-    }
+      ?: let {
+        context.challenge(errorKey, AuthenticationFailedCause.NoCredentials) { challengeFunc, call ->
+          call.respond(unauthorizedResponse())
+          challengeFunc.complete()
+        }
+        logger.warn("AuthHeader is not present or not a Bearer token.")
+        return
+      }
 
-    val firebaseToken = try {
+    val principal = try {
       auth.verifyIdToken(token.blob, true)
     } catch (ex: Exception) {
-      logger.error("Firebase verification failed.\n ${ex.message ?: ex.javaClass.simpleName}")
-      context.error(errorKey, AuthenticationFailedCause.Error("Firebase verification failed"))
-      return
+      logger.warn("Firebase verification failed.\n${ex.message ?: ex.javaClass.simpleName}")
+      null
     }
+      ?.let {
+        validate(context.call, it.toAuthorizedUser())
+      }
+      ?: let {
+        context.challenge(errorKey, AuthenticationFailedCause.InvalidCredentials) { challengeFunc, call ->
+          call.respond(unauthorizedResponse())
+          challengeFunc.complete()
+        }
+        logger.warn("Unable to obtain principal.")
+        return
+      }
 
-    validate(context.call, firebaseToken.toAuthorizedUser())?.let {
-      context.principal(it)
-    } ?: run {
-      logger.error("Validation returned a null principal.")
-      context.error(errorKey, AuthenticationFailedCause.Error("Validation returned a null principal."))
-    }
+    context.principal(principal)
   }
+
+  /**
+   * Creates an unauthorized response with the specified challenge.
+   *
+   * @return The unauthorized response.
+   */
+  private fun unauthorizedResponse() = UnauthorizedResponse(
+    HttpAuthHeader.bearerAuthChallenge(
+      scheme = AuthScheme.Bearer,
+      realm = config.realm
+    )
+  )
+
 }
 
 /**
- * Parses the authorization header from the application request.
+ * Registers a Firebase authentication provider.
  *
- * @return The parsed HttpAuthHeader or null if parsing fails.
+ * @param name The name of the authentication provider.
+ * @param configure The configuration function for the Firebase authentication provider.
  */
-internal fun ApplicationRequest.parseAuthorizationHeaderOrNull(): HttpAuthHeader? = try {
-  parseAuthorizationHeader()
-} catch (ex: Exception) {
-  logger.error("Unable to parse authorization header.\n ${ex.message ?: ex.javaClass.simpleName}")
-  null
+fun AuthenticationConfig.firebase(
+  name: String? = null,
+  configure: FirebaseConfig.() -> Unit
+) {
+  val provider = FirebaseAuthProvider(FirebaseConfig(name).apply(configure))
+  register(provider)
 }
-
-internal fun FirebaseToken.toAuthorizedUser() =
-  AuthorizedUser(
-    this.uid,
-    this.tenantId,
-    this.name,
-    this.email,
-    this.isEmailVerified,
-    this.picture,
-    this.issuer,
-    this.claims
-  )

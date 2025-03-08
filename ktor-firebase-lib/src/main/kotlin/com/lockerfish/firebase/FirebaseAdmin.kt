@@ -32,9 +32,10 @@ object FirebaseAdmin {
    * firebase:
    *  projectId: <projectId>
    *  serviceAccount: <serviceAccount.json>
-   *  databaseUrl: [optional] https://<projectId>.firebaseio.com
-   *  storageBucket: [optional] <projectId>.appspot.com
    *  ```
+   *
+   * projectId: The project ID of the Firebase project.
+   * serviceAccount: The path to the service account JSON file.
    *
    * @param application The Ktor application instance.
    */
@@ -46,13 +47,8 @@ object FirebaseAdmin {
       val serviceAccountFile = property("serviceAccount").getString()
       val serviceAccount = application::class.java.classLoader.getResourceAsStream(serviceAccountFile)
 
-      val databaseUrl = propertyOrNull("databaseUrl")?.getString()
-      val storageBucket = propertyOrNull("storageBucket")?.getString()
-
       with(FirebaseOptions.builder()) {
         setCredentials(GoogleCredentials.fromStream(serviceAccount))
-        if (databaseUrl != null) setDatabaseUrl(databaseUrl)
-        if (storageBucket != null) setStorageBucket(storageBucket)
         FirebaseApp.initializeApp(build(), projectId)
       }
     }

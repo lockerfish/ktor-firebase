@@ -1,6 +1,5 @@
 package com.lockerfish.firebase
 
-import io.ktor.server.application.*
 import io.ktor.server.auth.*
 
 /**
@@ -10,11 +9,13 @@ import io.ktor.server.auth.*
  */
 class FirebaseConfig(name: String?) : AuthenticationProvider.Config(name) {
 
+  var realm: String = "Server App"
+
   /**
    * Function to validate the Firebase token.
    * This function should be overridden to provide custom validation logic.
    */
-  internal var firebaseValidate: suspend ApplicationCall.(AuthorizedUser) -> Any? =
+  internal var authenticate: AuthenticationFunction<AuthorizedUser> =
     {
       throw IllegalStateException(
         "Firebase auth validate function is not specified, use firebase { validate { ... } } to fix this"
@@ -26,21 +27,7 @@ class FirebaseConfig(name: String?) : AuthenticationProvider.Config(name) {
    *
    * @param validate The validation function.
    */
-  fun validate(validate: suspend ApplicationCall.(AuthorizedUser) -> Any?) {
-    firebaseValidate = validate
+  fun validate(validate: AuthenticationFunction<AuthorizedUser>) {
+    this.authenticate = validate
   }
-}
-
-/**
- * Registers a Firebase authentication provider.
- *
- * @param name The name of the authentication provider.
- * @param configure The configuration function for the Firebase authentication provider.
- */
-fun AuthenticationConfig.firebase(
-  name: String? = null,
-  configure: FirebaseConfig.() -> Unit
-) {
-  val provider = FirebaseAuthProvider(FirebaseConfig(name).apply(configure))
-  register(provider)
 }
